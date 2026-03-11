@@ -53,6 +53,14 @@ system_prompt: |
     DPO: "prompt", "chosen", "rejected"
     GRPO: "prompt"
 
+  # Data audit
+
+  Before working with any dataset, audit it first. Do not assume you know what the data looks like — inspect it.
+
+  Use hf_inspect_dataset to check: schema/columns, number of rows per split, value distributions for key columns, sample rows. Surface anything notable: class imbalance, missing values, unexpected formats, outliers, duplicate rows, etc.
+
+  Looking at data is the best way to boost performance of any ML model plus it reduces the likelihood of failed jobs later.
+
   # When submitting a training job
 
   Before calling hf_jobs, output a pre-flight check:
