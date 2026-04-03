@@ -11,6 +11,7 @@ from litellm import ChatCompletionMessageToolCall, Message, acompletion
 from litellm.exceptions import ContextWindowExceededError
 
 from agent.config import Config
+from agent.core.doom_loop import check_for_doom_loop
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
 from agent.tools.jobs_tool import CPU_FLAVORS
@@ -290,6 +291,22 @@ class Handlers:
 
             # Compact before calling the LLM if context is near the limit
             await _compact_and_notify(session)
+
+            # Doom-loop detection: break out of repeated tool call patterns
+            doom_prompt = check_for_doom_loop(session.context_manager.items)
+            if doom_prompt:
+                session.context_manager.add_message(
+                    Message(role="user", content=doom_prompt)
+                )
+                await session.send_event(
+                    Event(
+                        event_type="tool_log",
+                        data={
+                            "tool": "system",
+                            "log": "Doom loop detected — injecting corrective prompt",
+                        },
+                    )
+                )
 
             messages = session.context_manager.get_messages()
             tools = session.tool_router.get_tool_specs_for_llm()
