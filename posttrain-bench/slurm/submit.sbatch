@@ -4,9 +4,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=256G
-#SBATCH --gres=gpu:1
+#SBATCH --mem=131072
+#SBATCH --gres=gpu:h100:1
 #SBATCH --time=12:00:00
+#SBATCH --tmp=400G
 #SBATCH --output=logs/ptb_%j.out
 #SBATCH --error=logs/ptb_%j.err
 #SBATCH --export=ALL
