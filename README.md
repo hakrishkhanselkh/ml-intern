@@ -50,25 +50,19 @@ ml-agent --max-iterations 100 "your prompt"
 ml-agent --no-stream "your prompt"
 ```
 
-If you haven't installed globally, you can still run from the project directory:
-
-```bash
-uv run python -m agent.main
-```
-
 ## Architecture
 
 ### Component Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         User/CLI                             │
-└────────────┬─────────────────────────────────────┬───────────┘
+│                         User/CLI                            │
+└────────────┬─────────────────────────────────────┬──────────┘
              │ Operations                          │ Events
              ↓ (user_input, exec_approval,         ↑
       submission_queue  interrupt, compact, ...)  event_queue
-             │                                         │
-             ↓                                         │
+             │                                          │
+             ↓                                          │
 ┌────────────────────────────────────────────────────┐  │
 │            submission_loop (agent_loop.py)         │  │
 │  ┌──────────────────────────────────────────────┐  │  │
@@ -96,11 +90,11 @@ uv run python -m agent.main
 │  │  │  │  │ ToolRouter                 │  │  │  │  │  │
 │  │  │  │  │  ├─ HF docs & research     │  │  │  │  │  │
 │  │  │  │  │  ├─ HF repos, datasets,    │  │  │  │  │  │
-│  │  │  │  │  │  jobs, papers            │  │  │  │  │  │
-│  │  │  │  │  ├─ GitHub code search      │  │  │  │  │  │
-│  │  │  │  │  ├─ Sandbox & local tools   │  │  │  │  │  │
-│  │  │  │  │  ├─ Planning                │  │  │  │  │  │
-│  │  │  │  │  └─ MCP server tools        │  │  │  │  │  │
+│  │  │  │  │  │  jobs, papers           │  │  │  │  │  │
+│  │  │  │  │  ├─ GitHub code search     │  │  │  │  │  │
+│  │  │  │  │  ├─ Sandbox & local tools  │  │  │  │  │  │
+│  │  │  │  │  ├─ Planning               │  │  │  │  │  │
+│  │  │  │  │  └─ MCP server tools       │  │  │  │  │  │
 │  │  │  │  └────────────────────────────┘  │  │  │  │  │
 │  │  │  └──────────────────────────────────┘  │  │  │  │
 │  │  │                                        │  │  │  │
@@ -160,7 +154,8 @@ User Message
      ║         ↓                                 ║
      ║  Continue loop ─────────────────┐         ║
      ║         ↑                       │         ║
-     ╚═════════╧═══════════════════════╧═════════╝
+     ║         └───────────────────────┘         ║
+     ╚═══════════════════════════════════════════╝
 ```
 
 ## Events
