@@ -181,11 +181,11 @@ def _friendly_error_message(error: Exception) -> str | None:
 async def _compact_and_notify(session: Session) -> None:
     """Run compaction and send event if context was reduced."""
     old_length = session.context_manager.context_length
-    max_ctx = session.context_manager.max_context
-    threshold = int(max_ctx * session.context_manager._COMPACT_THRESHOLD_RATIO)
+    model_max = session.context_manager.model_max_tokens
+    threshold = int(model_max * session.context_manager._COMPACT_THRESHOLD_RATIO)
     logger.debug(
-        "Compaction check: context_length=%d, max_context=%d, threshold=%d, needs_compact=%s",
-        old_length, max_ctx, threshold, old_length > threshold,
+        "Compaction check: context_length=%d, model_max_tokens=%d, threshold=%d, needs_compact=%s",
+        old_length, model_max, threshold, old_length > threshold,
     )
     tool_specs = session.tool_router.get_tool_specs_for_llm()
     await session.context_manager.compact(
@@ -197,7 +197,7 @@ async def _compact_and_notify(session: Session) -> None:
     if new_length != old_length:
         logger.warning(
             "Context compacted: %d -> %d tokens (max=%d, %d messages)",
-            old_length, new_length, max_ctx,
+            old_length, new_length, model_max,
             len(session.context_manager.items),
         )
         await session.send_event(
@@ -577,13 +577,13 @@ class Handlers:
                     logger.debug(
                         "Agent loop ending: no tool calls. "
                         "finish_reason=%s, token_count=%d, "
-                        "context_length=%d, max_context=%d, "
+                        "context_length=%d, model_max_tokens=%d, "
                         "iteration=%d/%d, "
                         "response_text=%s",
                         finish_reason,
                         token_count,
                         session.context_manager.context_length,
-                        session.context_manager.max_context,
+                        session.context_manager.model_max_tokens,
                         iteration,
                         max_iterations,
                         (content or "")[:500],
@@ -788,14 +788,14 @@ class Handlers:
                 # Force compact and retry this iteration
                 logger.warning(
                     "ContextWindowExceededError at iteration %d — forcing compaction "
-                    "(context_length=%d, max_context=%d, messages=%d)",
+                    "(context_length=%d, model_max_tokens=%d, messages=%d)",
                     iteration,
                     session.context_manager.context_length,
-                    session.context_manager.max_context,
+                    session.context_manager.model_max_tokens,
                     len(session.context_manager.items),
                 )
                 session.context_manager.context_length = (
-                    session.context_manager.max_context + 1
+                    session.context_manager.model_max_tokens + 1
                 )
                 await _compact_and_notify(session)
                 continue

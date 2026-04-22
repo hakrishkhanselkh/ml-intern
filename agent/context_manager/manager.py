@@ -73,7 +73,7 @@ class ContextManager:
 
     def __init__(
         self,
-        max_context: int = 180_000,
+        model_max_tokens: int = 180_000,
         compact_size: float = 0.1,
         untouched_messages: int = 5,
         tool_specs: list[dict[str, Any]] | None = None,
@@ -87,10 +87,10 @@ class ContextManager:
             hf_token=hf_token,
             local_mode=local_mode,
         )
-        # max_context is the model's real input-token ceiling; compaction
-        # triggers at _COMPACT_THRESHOLD_RATIO below it (see compact()).
-        self.max_context = max_context
-        self.compact_size = int(max_context * compact_size)
+        # The model's real input-token ceiling (from litellm.get_model_info).
+        # Compaction triggers at _COMPACT_THRESHOLD_RATIO below it.
+        self.model_max_tokens = model_max_tokens
+        self.compact_size = int(model_max_tokens * compact_size)
         self.context_length = 0  # Updated after each LLM call with actual usage
         self.untouched_messages = untouched_messages
         self.items: list[Message] = [Message(role="system", content=self.system_prompt)]
@@ -264,8 +264,8 @@ class ContextManager:
                 count += 1
         return False
 
-    # Trigger compaction at 90% of max_context so there's headroom for the
-    # next turn's prompt + response before we actually hit the ceiling.
+    # Trigger compaction at 90% of model_max_tokens so there's headroom for
+    # the next turn's prompt + response before we actually hit the ceiling.
     _COMPACT_THRESHOLD_RATIO = 0.9
 
     async def compact(
@@ -275,7 +275,7 @@ class ContextManager:
         hf_token: str | None = None,
     ) -> None:
         """Remove old messages to keep history under target size"""
-        threshold = int(self.max_context * self._COMPACT_THRESHOLD_RATIO)
+        threshold = int(self.model_max_tokens * self._COMPACT_THRESHOLD_RATIO)
         if self.context_length <= threshold or not self.items:
             return
 

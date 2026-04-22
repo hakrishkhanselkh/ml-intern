@@ -85,7 +85,7 @@ class Session:
         self.stream = stream
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
         self.context_manager = context_manager or ContextManager(
-            max_context=_get_max_tokens_safe(config.model_name),
+            model_max_tokens=_get_max_tokens_safe(config.model_name),
             compact_size=0.1,
             untouched_messages=5,
             tool_specs=tool_specs,
@@ -137,7 +137,7 @@ class Session:
     def update_model(self, model_name: str) -> None:
         """Switch the active model and update the context window limit."""
         self.config.model_name = model_name
-        self.context_manager.max_context = _get_max_tokens_safe(model_name)
+        self.context_manager.model_max_tokens = _get_max_tokens_safe(model_name)
 
     def increment_turn(self) -> None:
         """Increment turn counter (called after each user interaction)"""
