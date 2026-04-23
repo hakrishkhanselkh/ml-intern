@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any
 
 from dependencies import get_current_user
@@ -81,26 +82,51 @@ async def health_check() -> HealthResponse:
     )
 
 
+# Cached result of the last LLM health probe, keyed by model name.
+# Every frontend mount fires this endpoint, so without a cache we pay the
+# full probe cost for every page load. 60 s is short enough that a real
+# outage is surfaced within a minute, long enough to collapse concurrent
+# mounts to ~1 probe / model / minute across all users.
+_LLM_HEALTH_CACHE: dict[str, tuple[float, "LLMHealthResponse"]] = {}
+_LLM_HEALTH_CACHE_TTL_SEC = 60
+
+
 @router.get("/health/llm", response_model=LLMHealthResponse)
-async def llm_health_check() -> LLMHealthResponse:
+async def llm_health_check(
+    user: dict = Depends(get_current_user),
+) -> LLMHealthResponse:
     """Check if the LLM provider is reachable and the API key is valid.
 
-    Makes a minimal 1-token completion call.  Catches common errors:
-    - 401 → invalid API key
-    - 402/insufficient_quota → out of credits
-    - 429 → rate limited
-    - timeout / network → provider unreachable
+    The probe is a bare "hi" / max_tokens=1 completion with:
+      * no system prompt
+      * no tools
+      * no reasoning_effort / thinking (previously "high", which triggered
+        adaptive thinking and burned thousands of tokens per probe — root
+        cause of the 2026-04-23 cost incident)
+
+    The routing kwargs (api_base / api_key / Anthropic thinking kwargs) are
+    resolved via ``_resolve_llm_params`` without reasoning_effort, so the
+    probe stays at ~tens of input tokens on every provider we support.
+
+    Results are cached per-model for ``_LLM_HEALTH_CACHE_TTL_SEC`` seconds
+    so concurrent frontend mounts collapse to ~1 real probe / model / TTL.
     """
     model = session_manager.config.model_name
+    now = time.monotonic()
+    cached = _LLM_HEALTH_CACHE.get(model)
+    if cached and now - cached[0] < _LLM_HEALTH_CACHE_TTL_SEC:
+        return cached[1]
+
     try:
-        llm_params = _resolve_llm_params(model, reasoning_effort="high")
+        llm_params = _resolve_llm_params(model)
         await acompletion(
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=1,
+            temperature=0,
             timeout=10,
             **llm_params,
         )
-        return LLMHealthResponse(status="ok", model=model)
+        resp = LLMHealthResponse(status="ok", model=model)
     except Exception as e:
         err_str = str(e).lower()
         error_type = "unknown"
@@ -126,12 +152,15 @@ async def llm_health_check() -> LLMHealthResponse:
             error_type = "network"
 
         logger.warning(f"LLM health check failed ({error_type}): {e}")
-        return LLMHealthResponse(
+        resp = LLMHealthResponse(
             status="error",
             model=model,
             error=str(e)[:500],
             error_type=error_type,
         )
+
+    _LLM_HEALTH_CACHE[model] = (now, resp)
+    return resp
 
 
 @router.get("/config/model")
