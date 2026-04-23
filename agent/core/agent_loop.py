@@ -116,8 +116,26 @@ def _needs_approval(
 
 
 # -- LLM retry constants --------------------------------------------------
-_MAX_LLM_RETRIES = 3
-_LLM_RETRY_DELAYS = [5, 15, 30]  # seconds between retries
+# Two separate backoff schedules because rate limits and network blips
+# behave very differently. Network flakes clear in seconds; per-minute
+# token-rate limits only drain as the sliding window moves forward, so
+# we need minutes of patience for them.
+_MAX_LLM_RETRIES = 8
+_LLM_RETRY_DELAYS = [5, 15, 30, 60, 60, 60, 60, 60]            # ~5.5 min total
+_LLM_RATE_LIMIT_DELAYS = [30, 60, 120, 180, 300, 300, 300, 300]  # ~27 min total
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    """Rate-limit errors need longer backoff than generic transient errors —
+    the per-minute window must drain before the next call will succeed.
+    """
+    err_str = str(error).lower()
+    return (
+        "rate limit" in err_str
+        or "rate_limit" in err_str
+        or "429" in err_str
+        or "exceed your organization" in err_str
+    )
 
 
 def _is_transient_error(error: Exception) -> bool:
@@ -320,14 +338,21 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
                 ))
                 continue
             if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
-                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                # Rate-limit errors need longer backoff to let the per-minute
+                # window drain; generic transient (timeout, 5xx) clears in seconds.
+                if _is_rate_limit_error(e):
+                    _delay = _LLM_RATE_LIMIT_DELAYS[_llm_attempt]
+                    _kind = "rate limit"
+                else:
+                    _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                    _kind = "transient"
                 logger.warning(
-                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
-                    _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
+                    "%s LLM error (attempt %d/%d): %s — retrying in %ds",
+                    _kind.capitalize(), _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
                 )
                 await session.send_event(Event(
                     event_type="tool_log",
-                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
+                    data={"tool": "system", "log": f"LLM {_kind} error, retrying in {_delay}s..."},
                 ))
                 await asyncio.sleep(_delay)
                 continue
@@ -413,14 +438,21 @@ async def _call_llm_non_streaming(session: Session, messages, tools, llm_params)
                 ))
                 continue
             if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
-                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                # Rate-limit errors need longer backoff to let the per-minute
+                # window drain; generic transient (timeout, 5xx) clears in seconds.
+                if _is_rate_limit_error(e):
+                    _delay = _LLM_RATE_LIMIT_DELAYS[_llm_attempt]
+                    _kind = "rate limit"
+                else:
+                    _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                    _kind = "transient"
                 logger.warning(
-                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
-                    _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
+                    "%s LLM error (attempt %d/%d): %s — retrying in %ds",
+                    _kind.capitalize(), _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
                 )
                 await session.send_event(Event(
                     event_type="tool_log",
-                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
+                    data={"tool": "system", "log": f"LLM {_kind} error, retrying in {_delay}s..."},
                 ))
                 await asyncio.sleep(_delay)
                 continue
