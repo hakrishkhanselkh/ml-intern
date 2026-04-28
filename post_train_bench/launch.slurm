@@ -11,18 +11,22 @@
 
 set -euo pipefail
 
-if [ -z "${RUN_ROOT:-}" ]; then
-    echo "RUN_ROOT is required" >&2
-    exit 2
-fi
-if [ -z "${MATRIX_FILE:-}" ]; then
-    echo "MATRIX_FILE is required" >&2
-    exit 2
-fi
 if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
     echo "launch.slurm must be submitted as an array job" >&2
     exit 2
 fi
+if [ -z "${RUN_ROOT:-}" ]; then
+    if [ -z "${RUN_PARENT:-}" ] || [ -z "${RUN_STAMP:-}" ]; then
+        echo "RUN_ROOT or RUN_PARENT/RUN_STAMP is required" >&2
+        exit 2
+    fi
+    RUN_ROOT="${RUN_PARENT}/${RUN_STAMP}_${SLURM_ARRAY_JOB_ID}"
+fi
+if [ -z "${MATRIX_FILE:-}" ]; then
+    MATRIX_FILE="${RUN_ROOT}/matrix.jsonl"
+fi
+export RUN_ROOT
+export RUN_ID="${RUN_ID:-$(basename "$RUN_ROOT")}"
 
 mkdir -p "${RUN_ROOT}/slurm"
 exec >"${RUN_ROOT}/slurm/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out"

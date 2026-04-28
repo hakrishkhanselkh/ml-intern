@@ -16,8 +16,12 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}/
 `RUN_ID` is generated once per evaluation set as:
 
 ```text
-YYYY-MM-DD_HH-MM_{short_commit}
+YYYY-MM-DD_HH-MM-SS_{slurm_job_id}
 ```
+
+The submitter gets the Slurm job id by submitting the array held, writes the
+final run directory and metadata, then releases the job. Dry runs use a
+`YYYY-MM-DD_HH-MM-SS_dryrun` suffix because no Slurm job id exists.
 
 ## Prerequisites
 

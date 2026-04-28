@@ -21,7 +21,8 @@ Environment:
   POST_TRAIN_BENCH_DIR         Default: scratch/PostTrainBench
   POST_TRAIN_BENCH_DOCKER_IMAGE
                                Default: registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest
-  POST_TRAIN_BENCH_RUN_ID      Optional explicit run id.
+  POST_TRAIN_BENCH_RUN_ID      Optional explicit run id. Overrides the default
+                               YYYY-MM-DD_HH-MM-SS_{slurm_job_id} format.
 EOF
 }
 
@@ -59,18 +60,27 @@ if [ ! -d "$PTB_DIR/src/eval/tasks" ]; then
 fi
 PTB_DIR="$(cd "$PTB_DIR" && pwd)"
 
-SHORT_COMMIT="$(git rev-parse --short=12 HEAD)"
-RUN_ID="${POST_TRAIN_BENCH_RUN_ID:-$(date -u +%Y-%m-%d_%H-%M)_${SHORT_COMMIT}}"
-RUN_ROOT="${REPO_ROOT}/post_train_bench/runs/${ML_INTERN_AGENT_MODEL}/${RUN_ID}"
+RUN_STAMP="${POST_TRAIN_BENCH_RUN_STAMP:-$(date -u +%Y-%m-%d_%H-%M-%S)}"
+RUN_PARENT="${REPO_ROOT}/post_train_bench/runs/${ML_INTERN_AGENT_MODEL}"
+EXPLICIT_RUN_ID="${POST_TRAIN_BENCH_RUN_ID:-}"
+DOCKER_IMAGE="${POST_TRAIN_BENCH_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest}"
+PTB_SLURM_JOB_ID=""
 
-if [ -e "$RUN_ROOT" ]; then
-    echo "Run directory already exists: $RUN_ROOT" >&2
-    exit 2
+if [ -n "$EXPLICIT_RUN_ID" ] || [ "$DRY_RUN" -eq 1 ]; then
+    RUN_ID="${EXPLICIT_RUN_ID:-${RUN_STAMP}_dryrun}"
+    RUN_ROOT="${RUN_PARENT}/${RUN_ID}"
+    if [ -e "$RUN_ROOT" ]; then
+        echo "Run directory already exists: $RUN_ROOT" >&2
+        exit 2
+    fi
+    mkdir -p "$RUN_ROOT"/{slurm,results,artifacts,env}
+    MATRIX_FILE="$RUN_ROOT/matrix.jsonl"
+else
+    PENDING_ROOT="${RUN_PARENT}/.pending/${RUN_STAMP}_$$"
+    mkdir -p "$PENDING_ROOT"
+    MATRIX_FILE="$PENDING_ROOT/matrix.jsonl"
 fi
 
-mkdir -p "$RUN_ROOT"/{slurm,results,artifacts,env}
-
-MATRIX_FILE="$RUN_ROOT/matrix.jsonl"
 case "$MODE" in
     smoke)
         python - "$MATRIX_FILE" <<'PY'
@@ -119,10 +129,10 @@ PY
 esac
 
 MATRIX_COUNT="$(wc -l < "$MATRIX_FILE" | tr -d ' ')"
-DOCKER_IMAGE="${POST_TRAIN_BENCH_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest}"
-export RUN_ID MODE DOCKER_IMAGE PTB_DIR MATRIX_FILE MATRIX_COUNT
 
-python - "$RUN_ROOT/run_metadata.json" <<'PY'
+write_metadata() {
+    export RUN_ID MODE DOCKER_IMAGE PTB_DIR MATRIX_FILE MATRIX_COUNT RUN_STAMP PTB_SLURM_JOB_ID
+    python - "$RUN_ROOT/run_metadata.json" <<'PY'
 import json
 import os
 import subprocess
@@ -137,6 +147,8 @@ status = git("status", "--short")
 metadata = {
     "created_at": datetime.now(timezone.utc).isoformat(),
     "run_id": os.environ["RUN_ID"],
+    "run_stamp": os.environ["RUN_STAMP"],
+    "slurm_job_id": os.environ.get("PTB_SLURM_JOB_ID") or None,
     "mode": os.environ["MODE"],
     "ml_intern_agent_model": os.environ["ML_INTERN_AGENT_MODEL"],
     "ml_intern_branch": git("rev-parse", "--abbrev-ref", "HEAD"),
@@ -151,26 +163,78 @@ metadata = {
 }
 Path(sys.argv[1]).write_text(json.dumps(metadata, indent=2) + "\n")
 PY
+    env | sort > "$RUN_ROOT/env/submit_env.txt"
+}
 
-env | sort > "$RUN_ROOT/env/submit_env.txt"
+if [ -n "$EXPLICIT_RUN_ID" ]; then
+    SBATCH_CMD=(
+        sbatch
+        --parsable
+        "--array=0-$((MATRIX_COUNT - 1))"
+        "--export=ALL,RUN_ROOT=${RUN_ROOT},MATRIX_FILE=${MATRIX_FILE},PTB_DIR=${PTB_DIR},REPO_ROOT=${REPO_ROOT},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE},RUN_ID=${RUN_ID}"
+        post_train_bench/launch.slurm
+    )
+else
+    SBATCH_CMD=(
+        sbatch
+        --parsable
+        --hold
+        "--array=0-$((MATRIX_COUNT - 1))"
+        "--export=ALL,RUN_PARENT=${RUN_PARENT},RUN_STAMP=${RUN_STAMP},PTB_DIR=${PTB_DIR},REPO_ROOT=${REPO_ROOT},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE}"
+        post_train_bench/launch.slurm
+    )
+fi
 
-SBATCH_CMD=(
-    sbatch
-    "--array=0-$((MATRIX_COUNT - 1))"
-    "--export=ALL,RUN_ROOT=${RUN_ROOT},MATRIX_FILE=${MATRIX_FILE},PTB_DIR=${PTB_DIR},REPO_ROOT=${REPO_ROOT},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE},RUN_ID=${RUN_ID}"
-    post_train_bench/launch.slurm
-)
+if [ "$DRY_RUN" -eq 1 ]; then
+    write_metadata
+    printf '%q ' "${SBATCH_CMD[@]}" > "$RUN_ROOT/sbatch_command.txt"
+    printf '\n' >> "$RUN_ROOT/sbatch_command.txt"
+    echo "Run root: $RUN_ROOT"
+    echo "Matrix rows: $MATRIX_COUNT"
+    echo "Command: $(cat "$RUN_ROOT/sbatch_command.txt")"
+    echo "Dry run only; not submitting. The dry-run id uses a dryrun suffix because no Slurm job id exists."
+    exit 0
+fi
 
+if [ -n "$EXPLICIT_RUN_ID" ]; then
+    write_metadata
+    printf '%q ' "${SBATCH_CMD[@]}" > "$RUN_ROOT/sbatch_command.txt"
+    printf '\n' >> "$RUN_ROOT/sbatch_command.txt"
+    echo "Run root: $RUN_ROOT"
+    echo "Matrix rows: $MATRIX_COUNT"
+    echo "Command: $(cat "$RUN_ROOT/sbatch_command.txt")"
+    SBATCH_RESULT="$("${SBATCH_CMD[@]}")"
+    PTB_SLURM_JOB_ID="${SBATCH_RESULT%%;*}"
+    write_metadata
+    echo "Submitted batch job $PTB_SLURM_JOB_ID" | tee "$RUN_ROOT/sbatch_output.txt"
+    exit 0
+fi
+
+SBATCH_RESULT="$("${SBATCH_CMD[@]}")"
+PTB_SLURM_JOB_ID="${SBATCH_RESULT%%;*}"
+RUN_ID="${RUN_STAMP}_${PTB_SLURM_JOB_ID}"
+RUN_ROOT="${RUN_PARENT}/${RUN_ID}"
+
+if [ -e "$RUN_ROOT" ]; then
+    echo "Run directory already exists: $RUN_ROOT" >&2
+    echo "Held Slurm job $PTB_SLURM_JOB_ID was not released." >&2
+    exit 2
+fi
+
+mkdir -p "$RUN_ROOT"/{slurm,results,artifacts,env}
+mv "$MATRIX_FILE" "$RUN_ROOT/matrix.jsonl"
+rmdir "$PENDING_ROOT" 2>/dev/null || true
+MATRIX_FILE="$RUN_ROOT/matrix.jsonl"
+
+write_metadata
 printf '%q ' "${SBATCH_CMD[@]}" > "$RUN_ROOT/sbatch_command.txt"
 printf '\n' >> "$RUN_ROOT/sbatch_command.txt"
 
 echo "Run root: $RUN_ROOT"
 echo "Matrix rows: $MATRIX_COUNT"
 echo "Command: $(cat "$RUN_ROOT/sbatch_command.txt")"
-
-if [ "$DRY_RUN" -eq 1 ]; then
-    echo "Dry run only; not submitting."
-    exit 0
-fi
-
-"${SBATCH_CMD[@]}" | tee "$RUN_ROOT/sbatch_output.txt"
+{
+    echo "Submitted batch job $PTB_SLURM_JOB_ID"
+    echo "Slurm parsable output: $SBATCH_RESULT"
+} > "$RUN_ROOT/sbatch_output.txt"
+scontrol release "$PTB_SLURM_JOB_ID" | tee -a "$RUN_ROOT/sbatch_output.txt"
