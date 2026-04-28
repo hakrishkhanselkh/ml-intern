@@ -102,10 +102,12 @@ timeout --signal=TERM --kill-after=30s "$((NUM_HOURS * 60 + 5))m" \
         set -euo pipefail
         export HF_HOME=/hf-cache
         export PYTHONNOUSERSITE=1
+        export PYTHONPATH=/ml-intern-src:${PYTHONPATH:-}
+        export PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         cd /ml-intern-src
         uv pip install --system -e .
         cd /workspace/task
-        ml-intern \
+        python -m agent.main \
             --config /ml-intern-src/post_train_bench/ml_intern_posttrain_config.json \
             --model "$ML_INTERN_AGENT_MODEL" \
             --max-iterations -1 \
